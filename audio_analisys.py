@@ -54,7 +54,7 @@ def analize_audio(audio_dir):
         response = client.chat.completions.create(
             model = "gpt-4.1",
             messages = [
-                {"role": "system", "content": "다음 문장은 면접자의 답변 음성파일을 텍스트화 한 문장입니다. 부정확한 발음이나 문맥 상 자연스럽지 않은 내용을 교정해주세요."},
+                {"role": "system", "content": "다음 문장은 면접자의 답변 음성파일을 텍스트화 한 문장입니다. 부정확한 발음이나 문맥 상 자연스럽지 않은 내용을 교정한 한 문장으로만 답변해주세요."},
                 {"role": "user", "content": text}
             ]
         )
@@ -68,10 +68,6 @@ def analize_audio(audio_dir):
             "start": start,
             "end": end
         })
-
-    # 전체 텍스트 출력
-    print("\n--- 전체 텍스트 ---\n")
-    print(result["text"])
 
     # JSON 데이터 구성
     output_data = {"interview": segments}
