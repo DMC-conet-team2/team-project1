@@ -58,8 +58,9 @@ def analize_audio(model, client, audio_dir):
     result = model.transcribe(
         audio_dir,
         fp16=torch.cuda.is_available(),
-        temperature=0, 
-        initial_prompt="이 오디오는 면접자의 답변입니다. 이유, 동기, 배경, 성격, 경험 등의 단어가 포함될 수 있습니다."
+        temperature=0.2, 
+        initial_prompt="이 오디오는 면접자의 답변이며 이유, 동기, 배경, 성격, 경험 등의 단어가 포함될 수 있습니다.",
+        beam_size = 5 # beam search 사용 (더 많은 후보 탐색 → 정확도 향상)
     ) 
     print(f"모델 transcribe 완료. 감지된 언어: {result['language']}") # 감지된 언어 출력
 
@@ -72,7 +73,7 @@ def analize_audio(model, client, audio_dir):
 
         # 부정확한 발음이나 문맥 상 자연스럽지 않은 표현을 GPT를 통해 후처리 교정
         response = client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-3.5-turbo",
             messages=[
                 {
                     "role": "system",
