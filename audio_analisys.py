@@ -68,7 +68,7 @@ def analize_audio(model, client, audio_dir):
     for segment in result["segments"]:
         start = segment["start"]
         end = segment["end"]
-        text = segment["text"]
+        text = segment["text"].strip()
 
         # 부정확한 발음이나 문맥 상 자연스럽지 않은 표현을 GPT를 통해 후처리 교정
         response = client.chat.completions.create(
