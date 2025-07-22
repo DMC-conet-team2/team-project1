@@ -9,6 +9,12 @@ def analize_audio(audio_dir):
     실행 전 세팅은 아래 링크 참조
     - https://velog.io/@strurao/Python-OpenAI-Whisper-%EC%9D%8C%EC%84%B1%EC%9D%B8%EC%8B%9D#-%EC%84%A4%EC%B9%98-%EA%B3%BC%EC%A0%95
 
+    위 링크 세팅 중 필수 여부 정리
+    - torch         | ✅ 필수           | Whisper는 PyTorch 기반, 반드시 설치
+    - torchaudio    | ❌ 선택           | Whisper 기본 작동에는 필요 없지만, 오디오 전처리 등을 위해 유용
+    - torchvision   | ❌ 불필요         | 이미지 처리를 위한 것으로, Whisper에서는 사용되지 않습니다.
+    - ffmpeg        | ✅ 사실상 필수    | Whisper는 ffmpeg를 백엔드로 사용하여 다양한 오디오 포맷을 처리하므로 시스템에 설치되어 있어야 함
+
     파라미터
     - audio_dir (str): 분석 할 음성 파일 경로
 
