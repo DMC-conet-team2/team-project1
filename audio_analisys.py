@@ -1,4 +1,7 @@
+from dotenv import load_dotenv
+
 import json
+import openai
 import os
 import whisper
 
@@ -33,7 +36,7 @@ def analize_audio(audio_dir):
     model = whisper.load_model("base")
 
     # transcribe()는 오디오를 30초 단위로 분할하여 자동으로 텍스트로 변환
-    result = model.transcribe(audio_dir) 
+    result = model.transcribe(audio_dir, temperature=0.1, initial_prompt="이 오디오는 면접자의 답변입니다.") 
     print(f"Detected language: {result['language']}") # 감지된 언어 출력
 
     # 문장별 시간 출력
@@ -42,10 +45,26 @@ def analize_audio(audio_dir):
         start = segment["start"]
         end = segment["end"]
         text = segment["text"]
-        print(f"[{start:.1f}s --> {end:.1f}s] {text}")
+
+        load_dotenv() # .env 파일 로드
+        api_key = os.getenv("OPENAI_API_KEY") # 키 읽어오기
+        client = openai.OpenAI(api_key=api_key) # 클라이언트 생성
+
+        # 부정확한 발음이나 문맥 상 자연스럽지 않은 표현을 GPT를 통해 후처리 교정
+        response = client.chat.completions.create(
+            model = "gpt-4.1",
+            messages = [
+                {"role": "system", "content": "다음 문장은 면접자의 답변 음성파일을 텍스트화 한 문장입니다. 부정확한 발음이나 문맥 상 자연스럽지 않은 내용을 교정해주세요."},
+                {"role": "user", "content": text}
+            ]
+        )
+
+        corrected = response.choices[0].message.content
+
+        print(f"[{start:.1f}s --> {end:.1f}s] {corrected}")
         # 분석 된 문장 파일 저장을 위해 append
         segments.append({
-            "sentence": text.strip(),
+            "sentence": corrected.strip(),
             "start": start,
             "end": end
         })
@@ -68,4 +87,7 @@ def analize_audio(audio_dir):
 
     print(f"\n✅ JSON 파일이 저장되었습니다: {json_path}")
 
-analize_audio('./audio/voice-sample.mp3')
+analize_audio('./audio/ckmk_a_bm_f_e_47109.wav')
+analize_audio('./audio/ckmk_a_bm_f_e_47110.wav')
+analize_audio('./audio/ckmk_a_bm_f_e_47111.wav')
+analize_audio('./audio/ckmk_a_bm_f_e_47112.wav')
