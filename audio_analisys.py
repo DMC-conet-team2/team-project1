@@ -1,6 +1,8 @@
 from dotenv import load_dotenv
 
 import json
+import librosa
+import numpy as np
 import openai
 import os
 import pyloudnorm as pyln
@@ -26,6 +28,31 @@ def load_whisper_model(model_size = "large"):
         print("⚠️ CUDA 사용 불가 — CPU로 실행됩니다")
     
     return model
+
+def extract_audio_features(audio_path, start, end, sr=16000):
+    '''
+    음성 파일에서 감정 변화를 분류하기 위해 특징들을 감지하는 함수
+    '''
+
+    y, sr = librosa.load(audio_path, sr=sr, offset=start, duration=end - start)
+
+    # Pitch
+    pitches, magnitudes = librosa.piptrack(y=y, sr=sr)
+    pitch_values = pitches[magnitudes > np.median(magnitudes)]
+    pitch_mean = float(np.mean(pitch_values)) if pitch_values.size > 0 else 0.0
+    pitch_std = float(np.std(pitch_values)) if pitch_values.size > 0 else 0.0
+
+    # Energy (RMS)
+    rms = librosa.feature.rms(y=y)
+    energy_mean = float(np.mean(rms)) if rms.size > 0 else 0.0
+    energy_std = float(np.std(rms)) if rms.size > 0 else 0.0
+
+    return {
+        "pitch_mean": pitch_mean,
+        "pitch_std": pitch_std,
+        "energy_mean": energy_mean,
+        "energy_std": energy_std
+    }
 
 def analize_audio(model, client, audio_dir):
     """
@@ -86,7 +113,7 @@ def analize_audio(model, client, audio_dir):
         word_cnt = len(text.split()) # Whisper로 읽어온 원본 텍스트 기준
         wps = word_cnt / duration if duration > 0 else 0 # words per second
 
-        # 부정확한 발음이나 문맥 상 자연스럽지 않은 표현을 GPT를 통해 후처리 교정
+        # 1. 부정확한 발음이나 문맥 상 자연스럽지 않은 표현을 GPT를 통해 후처리 교정
         response = client.chat.completions.create(
             model="gpt-4.1",
             messages=[
@@ -109,11 +136,44 @@ def analize_audio(model, client, audio_dir):
 
         corrected = response.choices[0].message.content.strip()
 
-        print(f"[{start:.1f}s --> {end:.1f}s] {corrected}")
+        # 2. 음향적 특징 추출
+        audio_features = extract_audio_features(audio_dir, start, end)
+        pitch_mean = audio_features["pitch_mean"]
+        pitch_std = audio_features["pitch_std"]
+        energy_mean = audio_features["energy_mean"]
+        energy_std = audio_features["energy_std"]
+
+        # 3. 감정 분석
+        emotion_prompt = f"""
+        문장: "{corrected}"
+        평균 pitch: {pitch_mean:.1f}Hz, pitch 변화량: {pitch_std:.2f}
+        평균 에너지: {energy_mean:.5f}, 에너지 변화량: {energy_std:.5f}
+        말 빠르기(WPS): {wps:.2f}
+        """
+
+        emotion_response = client.chat.completions.create(
+            model="gpt-4.1",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "당신은 문장의 감정을 분석하는 전문가입니다. "
+                        "텍스트와 음향적 특성을 고려하여 이 문장의 감정을 추론하세요: "
+                        "감정 하나의 단어만 출력하세요."
+                    )
+                },
+                {"role": "user", "content": emotion_prompt}
+            ]
+        )
+        emotion = emotion_response.choices[0].message.content.strip()
+
+        print(f"[{start:.1f}s --> {end:.1f}s] [{emotion}] {corrected}")
+
         # 분석 된 문장 파일 저장을 위해 append
         segments.append({
             "original_sentence": text,
             "corrected_sentence": corrected,
+            "emotion": emotion,
             "start": start,
             "end": end,
             "wps": wps
