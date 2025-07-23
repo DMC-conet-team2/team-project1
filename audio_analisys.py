@@ -83,7 +83,7 @@ def analize_audio(model, client, audio_dir):
     - client: OpenAI API 클라이언트
     - audio_dir (str): 분석 할 음성 파일 경로
 
-    호출 예시: analize_audio('./audio/voice-sample.mp3')
+    호출 예시: analize_audio(model, client, './audio/voice-sample.mp3')
     """
 
     # 입력한 파일 경로 검증
