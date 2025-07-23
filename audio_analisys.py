@@ -145,7 +145,7 @@ def analize_audio(model, client, audio_dir):
 
         # 3. 감정 분석
         emotion_prompt = f"""
-        문장: "{corrected}"
+        문장: "{text}"
         평균 pitch: {pitch_mean:.1f}Hz, pitch 변화량: {pitch_std:.2f}
         평균 에너지: {energy_mean:.5f}, 에너지 변화량: {energy_std:.5f}
         말 빠르기(WPS): {wps:.2f}
