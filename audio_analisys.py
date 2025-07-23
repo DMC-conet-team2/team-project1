@@ -14,10 +14,13 @@ def load_whisper_model(model_size = "large"):
     '''
     Whisper 모델을 return 하는 함수(model_size 다운그레이드 시 발음이 부정확할 경우 이상하게 인식되는 경우가 있어 large 고정)
 
+    파라미터
+    - model_size: Whisper 모델 크기(tiny, base, small, medium, large 중 선택)
+
     호출 예시: model = load_whisper_model()
     '''
     
-    model = whisper.load_model(model_size) # Whisper 모델 로드(tiny, base, small, medium, large 중 선택)
+    model = whisper.load_model(model_size) # Whisper 모델 로드
     print(f"호출된 모델 크기: {model_size}")
 
     # GPU 사용 가능하면 모델을 GPU로
@@ -32,6 +35,14 @@ def load_whisper_model(model_size = "large"):
 def extract_audio_features(audio_path, start, end, sr=16000):
     '''
     음성 파일에서 감정 변화를 분류하기 위해 특징들을 감지하는 함수
+
+    파라미터
+    - audio_path: 음성파일 경로
+    - start: 시작 시간
+    - end: 끝 시간
+    - sr: sampling rate
+
+    호출 예시: audio_features = extract_audio_features(audio_dir, start, end)
     '''
 
     y, sr = librosa.load(audio_path, sr=sr, offset=start, duration=end - start)
