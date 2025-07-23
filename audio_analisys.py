@@ -3,6 +3,8 @@ from dotenv import load_dotenv
 import json
 import openai
 import os
+import pyloudnorm as pyln
+import soundfile as sf
 import torch
 import whisper
 
@@ -54,6 +56,14 @@ def analize_audio(model, client, audio_dir):
         print('존재하지 않는 음성파일입니다.\n파일 위치를 다시 확인하세요.')
         return
 
+    # 평균 소리 크기 계산
+    # LUFS 단위 관련 설명 참조: https://en.wikipedia.org/wiki/LUFS
+    # LUFS 기준 참고용 링크: https://www.rtw.com/en/blog/worldwide-loudness-delivery-standards.html
+    data, rate = sf.read(audio_dir)
+    meter = pyln.Meter(rate) 
+    loudness = meter.integrated_loudness(data)
+    print(f"Integrated Loudness: {loudness:.2f} LUFS")
+
     # transcribe()는 오디오를 30초 단위로 분할하여 자동으로 텍스트로 변환
     result = model.transcribe(
         audio_dir,
@@ -71,6 +81,11 @@ def analize_audio(model, client, audio_dir):
         end = segment["end"]
         text = segment["text"].strip()
 
+        # 말 빠르기 계산(초 당 몇 개의 단어를 말 했는지)
+        duration = end - start
+        word_cnt = len(text.split()) # Whisper로 읽어온 원본 텍스트 기준
+        wps = word_cnt / duration if duration > 0 else 0 # words per second
+
         # 부정확한 발음이나 문맥 상 자연스럽지 않은 표현을 GPT를 통해 후처리 교정
         response = client.chat.completions.create(
             model="gpt-4.1",
@@ -81,8 +96,8 @@ def analize_audio(model, client, audio_dir):
                         "당신은 면접자의 음성 인식 결과를 맞춤법과 흐름 위주로 교정하는 교정 도우미입니다. \
                         사용자의 어투 및 어미를 보존하고, 문법 오류와 앞 뒤 단어와 이어지지 않는 어색한 표현만 자연스럽게 수정하세요. 예: '교본 근무' → '교번근무' 혹은 '교대근무' \
                         오타나 잘못 인식된 단어는 문맥상 자연스럽게 복원하세요. 예: '이후' → '이유'. \
-                        답변은 문장 하나로 출력하되, 면접 말투(자연스럽고 공손한 구어체)를 유지하며 중간에 끊긴 문장인 경우 이어지는 답변이 있을 수 있으니 \
-                        그대로 두고 표현만 위에 제시한대로 다듬으세요."
+                        답변은 문장 하나로 출력하되, 면접 말투(자연스럽고 공손한 구어체)를 유지하며 중간에 끊긴 문장인 경우 이어지는 답변이 있을 수 있으니 구조를 바꾸지 말고 \
+                        표현만 위에 제시한대로 다듬으세요."
                     )
                 },
                 {
@@ -100,11 +115,12 @@ def analize_audio(model, client, audio_dir):
             "original_sentence": text,
             "corrected_sentence": corrected,
             "start": start,
-            "end": end
+            "end": end,
+            "wps": wps
         })
 
     # JSON 데이터 구성
-    output_data = {"interview": segments}
+    output_data = {"interview": segments, "LUFS": loudness}
 
     # JSON 파일 저장 경로 구성
     os.makedirs("./json", exist_ok=True)  # 디렉토리 없으면 생성
