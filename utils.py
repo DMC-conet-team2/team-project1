@@ -36,3 +36,13 @@ def dump_json(json_dir = './json', filename = '', json_data = {}):
         json.dump(json_data, f, ensure_ascii=False, indent=2)
 
     print(f"\n✅ JSON 파일이 저장되었습니다: {json_path}")
+
+def read_json(json_dir = './json', filename = ''):
+    json_path = f"./{json_dir}/{filename}.json"
+
+    # JSON 읽기
+    with open(json_path, "r", encoding = "utf-8") as f:
+        data = json.load(f)
+    
+    print(f"\n✅ JSON 파일을 읽어왔습니다: {json_path}")
+    return data

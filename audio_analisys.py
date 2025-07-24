@@ -1,5 +1,5 @@
 from audio_utils import extract_audio_features
-from utils import OpenAIClient, dump_json
+from utils import OpenAIClient, dump_json, read_json
 from queue import Queue
 
 import numpy as np
@@ -261,3 +261,28 @@ class StaticAudioAnalyzer:
         base_filename = os.path.splitext(os.path.basename(audio_dir))[0]
 
         dump_json(filename = base_filename, json_data = output_data)
+
+class AudioEvaluator:
+    def __init__(self, filename):
+        self.filename = filename
+        self.data = read_json(filename)
+    
+    def evaluate(self):
+        # LUFS 평가
+        lufs = self.data.get("LUFS")
+        if lufs is None:
+            print("LUFS 데이터가 없습니다.")
+        elif -24 <= lufs <= -22:
+            print(f"✅ 목소리 크기 정상: [{lufs} LUFS]")
+        else:
+            print(f"⚠️ 목소리 크기 이상: 너무 크거나 작습니다. [{lufs} LUFS]")
+
+        # WPS 평가
+        for idx, sentence in enumerate(self.data.get("interview", []), 1):
+            wps = sentence.get("wps")
+            if wps is None:
+                print(f"문장 {idx}: WPS 데이터가 없습니다.")
+            elif 2.5 <= wps <= 3.0:
+                print(f"✅ 문장 {idx}의 WPS: 정상 [{wps}]")
+            else:
+                print(f"⚠️ 문장 {idx}의 WPS: 빠르거나 느립니다. [{wps}]")
