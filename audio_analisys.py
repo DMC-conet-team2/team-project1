@@ -1,222 +1,263 @@
-from dotenv import load_dotenv
+from audio_utils import extract_audio_features
+from utils import OpenAIClient, dump_json
+from queue import Queue
 
-import json
-import librosa
 import numpy as np
-import openai
 import os
 import pyloudnorm as pyln
+import sounddevice as sd
 import soundfile as sf
+import tempfile
+import threading
+import time
 import torch
 import whisper
 
-def load_whisper_model(model_size = "large"):
-    '''
-    Whisper 모델을 return 하는 함수(model_size 다운그레이드 시 발음이 부정확할 경우 이상하게 인식되는 경우가 있어 large 고정)
+"""
+### 음성 분석의 정상범위 평가 기준
+- 소리 크기 : –23 LUFS ± 1.0
+- 말 빠르기 : 150~180 WPM(2.5 ~ 3 WPS)
 
-    파라미터
-    - model_size: Whisper 모델 크기(tiny, base, small, medium, large 중 선택)
+### 평가 기준 근거
+- 소리 크기
+    - EBU(European Broadcasting Union)의 라이브 방송 표준 범위
+    - 참고 근거 : https://tech.ebu.ch/files/live/sites/tech/files/shared/r/r128.pdf
+- 말 빠르기
+    - 자연스러운 자발적 발화에서의 평균 WPM 추정 범위
+    - https://ccnmtl.columbia.edu/services/dropoff/krauss/seqential_patterns.pdf
+"""
 
-    호출 예시: model = load_whisper_model()
-    '''
+class RealTimeAudioAnalyzer:
+    def __init__(self):
+        self.whisper_model = self.load_whisper_model()
+
+        self.q = Queue()
+        self.sample_rate = 16000
+        self.chunk_duration = 5 # 초 단위
+        self.openai_client = OpenAIClient()
+        self.listening = False
+        self.output_sentences = []
+
+    def load_whisper_model(self, model_size = "large"):
+        '''
+        Whisper 모델을 return 하는 함수(model_size 다운그레이드 시 발음이 부정확할 경우 이상하게 인식되는 경우가 있어 large 고정)
+
+        파라미터
+        - model_size: Whisper 모델 크기(tiny, base, small, medium, large 중 선택)
+
+        호출 예시: model = load_whisper_model()
+        '''
+        
+        model = whisper.load_model(model_size) # Whisper 모델 로드
+        print(f"호출된 모델 크기: {model_size}")
+
+        # GPU 사용 가능하면 모델을 GPU로
+        if torch.cuda.is_available():
+            print("✅ CUDA 사용 가능 — GPU로 모델 로드 중")
+            model = model.to("cuda")
+        else:
+            print("⚠️ CUDA 사용 불가 — CPU로 실행됩니다")
+        
+        return model
     
-    model = whisper.load_model(model_size) # Whisper 모델 로드
-    print(f"호출된 모델 크기: {model_size}")
+    def audio_callback(self, indata, frames, time_info, status):
+        self.q.put(indata.copy())
 
-    # GPU 사용 가능하면 모델을 GPU로
-    if torch.cuda.is_available():
-        print("✅ CUDA 사용 가능 — GPU로 모델 로드 중")
-        model = model.to("cuda")
-    else:
-        print("⚠️ CUDA 사용 불가 — CPU로 실행됩니다")
-    
-    return model
+    def start_stream(self):
+        self.listening = True
+        threading.Thread(target=self._record_audio, daemon=True).start()
+        threading.Thread(target=self._transcribe_loop, daemon=True).start()
+        print("🎧 실시간 음성 분석을 시작합니다. (Ctrl+C로 종료)")
 
-def extract_audio_features(audio_path, start, end, sr=16000):
-    '''
-    음성 파일에서 감정 변화를 분류하기 위해 특징들을 감지하는 함수
+    def _record_audio(self):
+        with sd.InputStream(samplerate=self.sample_rate, channels=1, callback=self.audio_callback):
+            while self.listening:
+                time.sleep(0.1)
 
-    파라미터
-    - audio_path: 음성파일 경로
-    - start: 시작 시간
-    - end: 끝 시간
-    - sr: sampling rate
+    def _transcribe_loop(self):
+        while self.listening:
+            audio_chunk = self.q.get()
+            audio_chunk = np.squeeze(audio_chunk)
 
-    호출 예시: audio_features = extract_audio_features(audio_dir, start, end)
-    '''
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                filepath = f.name
+                sf.write(f.name, audio_chunk, self.sample_rate)
 
-    y, sr = librosa.load(audio_path, sr=sr, offset=start, duration=end - start)
+            # Whisper 처리
+            result = self.whisper_model.transcribe(
+                filepath,
+                fp16=torch.cuda.is_available(),
+                temperature=0.2,
+                initial_prompt="이 오디오는 면접자의 답변입니다."
+            )
 
-    # Pitch
-    pitches, magnitudes = librosa.piptrack(y=y, sr=sr)
-    pitch_values = pitches[magnitudes > np.median(magnitudes)]
-    pitch_mean = float(np.mean(pitch_values)) if pitch_values.size > 0 else 0.0
-    pitch_std = float(np.std(pitch_values)) if pitch_values.size > 0 else 0.0
+            text = result["text"].strip()
+            duration = self.chunk_duration
+            wps = len(text.split()) / duration if duration > 0 else 0
 
-    # Energy (RMS)
-    rms = librosa.feature.rms(y=y)
-    energy_mean = float(np.mean(rms)) if rms.size > 0 else 0.0
-    energy_std = float(np.std(rms)) if rms.size > 0 else 0.0
+            # 교정
+            corrected = self.openai_client.create_response(
+                system_content="면접자의 말투를 유지하며 맞춤법 위주로 교정하며 교정한 내용만 출력하세요.",
+                user_content=text
+            )
 
-    return {
-        "pitch_mean": pitch_mean,
-        "pitch_std": pitch_std,
-        "energy_mean": energy_mean,
-        "energy_std": energy_std
-    }
+            # 감정 추정
+            features = extract_audio_features(filepath, 0, self.chunk_duration)
+            emotion_prompt = f"""
+            문장: "{text}"
+            평균 pitch: {features["pitch_mean"]:.1f}Hz, pitch 변화량: {features["pitch_std"]:.2f}
+            평균 에너지: {features["energy_mean"]:.5f}, 에너지 변화량: {features["energy_std"]:.5f}
+            말 빠르기(WPS): {wps:.2f}
+            """
+            emotion = self.openai_client.create_response(
+                system_content="이 문장의 감정을 하나의 단어로 추론하세요.",
+                user_content=emotion_prompt
+            )
 
-def analize_audio(model, client, audio_dir):
-    """
-    주어진 음성 파일을 Whisper로 분석하여 언어를 감지하고, 문장별 시작/끝 시간과 텍스트를 출력하는 함수
+            print(f"[{emotion}] {corrected}")
 
-    실행 전 세팅은 아래 링크 참조
-    - https://velog.io/@strurao/Python-OpenAI-Whisper-%EC%9D%8C%EC%84%B1%EC%9D%B8%EC%8B%9D#-%EC%84%A4%EC%B9%98-%EA%B3%BC%EC%A0%95
+            # 저장
+            self.output_sentences.append({
+                "original_sentence": text,
+                "corrected_sentence": corrected,
+                "emotion": emotion,
+                "wps": wps
+            })
 
-    위 링크 세팅 중 필수 여부 정리
-    - torch         | ✅ 필수           | Whisper는 PyTorch 기반, 반드시 설치
-    - torchaudio    | ❌ 선택           | Whisper 기본 작동에는 필요 없지만, 오디오 전처리 등을 위해 유용
-    - torchvision   | ❌ 불필요         | 이미지 처리를 위한 것으로, Whisper에서는 사용되지 않습니다.
-    - ffmpeg        | ✅ 사실상 필수    | Whisper는 ffmpeg를 백엔드로 사용하여 다양한 오디오 포맷을 처리하므로 시스템에 설치되어 있어야 함
+            os.remove(filepath)  # 임시 파일 삭제
 
-    파라미터
-    - model: Whisper 모델
-    - client: OpenAI API 클라이언트
-    - audio_dir (str): 분석 할 음성 파일 경로
+    def stop(self):
+        self.listening = False
+        dump_json(filename="realtime_output", json_data={"interview": self.output_sentences})
+        print("\n🛑 분석 종료. JSON 파일 저장 완료.")
 
-    호출 예시: analize_audio(model, client, './audio/voice-sample.mp3')
-    """
+class StaticAudioAnalyzer:
+    def __init__(self):
+        self.whisper_model = self.load_whisper_model()
 
-    # 입력한 파일 경로 검증
-    if not audio_dir:
-        print('음성 파일 경로 지정이 잘못되었습니다.')
-        return
-    if not os.path.exists(audio_dir):
-        print('존재하지 않는 음성파일입니다.\n파일 위치를 다시 확인하세요.')
-        return
+    def load_whisper_model(self, model_size = "large"):
+        '''
+        Whisper 모델을 return 하는 함수(model_size 다운그레이드 시 발음이 부정확할 경우 이상하게 인식되는 경우가 있어 large 고정)
 
-    # 평균 소리 크기 계산
-    # LUFS 단위 관련 설명 참조: https://en.wikipedia.org/wiki/LUFS
-    # LUFS 기준 참고용 링크: https://www.rtw.com/en/blog/worldwide-loudness-delivery-standards.html
-    data, rate = sf.read(audio_dir)
-    meter = pyln.Meter(rate) 
-    loudness = meter.integrated_loudness(data)
-    print(f"Integrated Loudness: {loudness:.2f} LUFS")
+        파라미터
+        - model_size: Whisper 모델 크기(tiny, base, small, medium, large 중 선택)
 
-    # transcribe()는 오디오를 30초 단위로 분할하여 자동으로 텍스트로 변환
-    result = model.transcribe(
-        audio_dir,
-        fp16=torch.cuda.is_available(),
-        temperature=0.2, 
-        initial_prompt="이 오디오는 면접자의 답변이며 이유, 동기, 배경, 성격, 경험 등의 단어가 포함될 수 있습니다.",
-        beam_size = 5 # beam search 사용 (더 많은 후보 탐색 → 정확도 향상)
-    ) 
-    print(f"모델 transcribe 완료. 감지된 언어: {result['language']}") # 감지된 언어 출력
+        호출 예시: model = load_whisper_model()
+        '''
+        
+        model = whisper.load_model(model_size) # Whisper 모델 로드
+        print(f"호출된 모델 크기: {model_size}")
 
-    # 문장별 시간 출력
-    segments = []
-    for segment in result["segments"]:
-        start = segment["start"]
-        end = segment["end"]
-        text = segment["text"].strip()
+        # GPU 사용 가능하면 모델을 GPU로
+        if torch.cuda.is_available():
+            print("✅ CUDA 사용 가능 — GPU로 모델 로드 중")
+            model = model.to("cuda")
+        else:
+            print("⚠️ CUDA 사용 불가 — CPU로 실행됩니다")
+        
+        return model
 
-        # 말 빠르기 계산(초 당 몇 개의 단어를 말 했는지)
-        duration = end - start
-        word_cnt = len(text.split()) # Whisper로 읽어온 원본 텍스트 기준
-        wps = word_cnt / duration if duration > 0 else 0 # words per second
+    def analize_audio(self, openai_client, audio_dir):
+        """
+        주어진 음성 파일을 Whisper로 분석하여 언어를 감지하고, 문장별 시작/끝 시간과 텍스트를 출력하는 함수
 
-        # 1. 부정확한 발음이나 문맥 상 자연스럽지 않은 표현을 GPT를 통해 후처리 교정
-        response = client.chat.completions.create(
-            model="gpt-4.1",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "당신은 면접자의 음성 인식 결과를 맞춤법과 흐름 위주로 교정하는 교정 도우미입니다. \
-                        사용자의 어투 및 어미를 보존하고, 문법 오류와 앞 뒤 단어와 이어지지 않는 어색한 표현만 자연스럽게 수정하세요. 예: '교본 근무' → '교번근무' 혹은 '교대근무' \
-                        오타나 잘못 인식된 단어는 문맥상 자연스럽게 복원하세요. 예: '이후' → '이유'. \
-                        답변은 문장 하나로 출력하되, 면접 말투(자연스럽고 공손한 구어체)를 유지하며 중간에 끊긴 문장인 경우 이어지는 답변이 있을 수 있으니 구조를 바꾸지 말고 \
-                        표현만 위에 제시한대로 다듬으세요."
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": text
-                }
-            ]
-        )
+        실행 전 세팅은 아래 링크 참조
+        - https://velog.io/@strurao/Python-OpenAI-Whisper-%EC%9D%8C%EC%84%B1%EC%9D%B8%EC%8B%9D#-%EC%84%A4%EC%B9%98-%EA%B3%BC%EC%A0%95
 
-        corrected = response.choices[0].message.content.strip()
+        위 링크 세팅 중 필수 여부 정리
+        - torch         | ✅ 필수           | Whisper는 PyTorch 기반, 반드시 설치
+        - torchaudio    | ❌ 선택           | Whisper 기본 작동에는 필요 없지만, 오디오 전처리 등을 위해 유용
+        - torchvision   | ❌ 불필요         | 이미지 처리를 위한 것으로, Whisper에서는 사용되지 않습니다.
+        - ffmpeg        | ✅ 사실상 필수    | Whisper는 ffmpeg를 백엔드로 사용하여 다양한 오디오 포맷을 처리하므로 시스템에 설치되어 있어야 함
 
-        # 2. 음향적 특징 추출
-        audio_features = extract_audio_features(audio_dir, start, end)
-        pitch_mean = audio_features["pitch_mean"]
-        pitch_std = audio_features["pitch_std"]
-        energy_mean = audio_features["energy_mean"]
-        energy_std = audio_features["energy_std"]
+        파라미터
+        - client: OpenAI API 클라이언트
+        - audio_dir (str): 분석 할 음성 파일 경로
 
-        # 3. 감정 분석
-        emotion_prompt = f"""
-        문장: "{text}"
-        평균 pitch: {pitch_mean:.1f}Hz, pitch 변화량: {pitch_std:.2f}
-        평균 에너지: {energy_mean:.5f}, 에너지 변화량: {energy_std:.5f}
-        말 빠르기(WPS): {wps:.2f}
+        호출 예시: analize_audio(client, './audio/voice-sample.mp3')
         """
 
-        emotion_response = client.chat.completions.create(
-            model="gpt-4.1",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "당신은 문장의 감정을 분석하는 전문가입니다. "
-                        "텍스트와 음향적 특성을 고려하여 이 문장의 감정을 추론하세요: "
-                        "감정 하나의 단어만 출력하세요."
-                    )
-                },
-                {"role": "user", "content": emotion_prompt}
-            ]
-        )
-        emotion = emotion_response.choices[0].message.content.strip()
+        # 입력한 파일 경로 검증
+        if not audio_dir:
+            print('음성 파일 경로 지정이 잘못되었습니다.')
+            return
+        if not os.path.exists(audio_dir):
+            print('존재하지 않는 음성파일입니다.\n파일 위치를 다시 확인하세요.')
+            return
 
-        print(f"[{start:.1f}s --> {end:.1f}s] [{emotion}] {corrected}")
+        # 평균 소리 크기 계산
+        data, rate = sf.read(audio_dir)
+        meter = pyln.Meter(rate) 
+        loudness = meter.integrated_loudness(data)
+        print(f"Integrated Loudness: {loudness:.2f} LUFS")
 
-        # 분석 된 문장 파일 저장을 위해 append
-        segments.append({
-            "original_sentence": text,
-            "corrected_sentence": corrected,
-            "emotion": emotion,
-            "start": start,
-            "end": end,
-            "wps": wps
-        })
+        # transcribe()는 오디오를 30초 단위로 분할하여 자동으로 텍스트로 변환
+        result = self.whisper_model.transcribe(
+            audio_dir,
+            fp16=torch.cuda.is_available(),
+            temperature=0.2, 
+            initial_prompt="이 오디오는 면접자의 답변이며 이유, 동기, 배경, 성격, 경험 등의 단어가 포함될 수 있습니다.",
+            beam_size = 5 # beam search 사용 (더 많은 후보 탐색 → 정확도 향상)
+        ) 
+        print(f"모델 transcribe 완료. 감지된 언어: {result['language']}") # 감지된 언어 출력
 
-    # JSON 데이터 구성
-    output_data = {"interview": segments, "LUFS": loudness}
+        # 문장별 시간 출력
+        sentences = []
+        for segment in result["segments"]:
+            start = segment["start"]
+            end = segment["end"]
+            text = segment["text"].strip()
 
-    # JSON 파일 저장 경로 구성
-    os.makedirs("./json", exist_ok=True)  # 디렉토리 없으면 생성
-    base_filename = os.path.splitext(os.path.basename(audio_dir))[0]
-    json_path = f"./json/{base_filename}.json"
+            # 말 빠르기 계산(초 당 몇 개의 단어를 말 했는지)
+            duration = end - start
+            word_cnt = len(text.split()) # Whisper로 읽어온 원본 텍스트 기준
+            wps = word_cnt / duration if duration > 0 else 0 # words per second
 
-    # JSON 저장
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(output_data, f, ensure_ascii=False, indent=2)
+            # 1. 부정확한 발음이나 문맥 상 자연스럽지 않은 표현을 GPT를 통해 후처리 교정
+            corrected = openai_client.create_response(
+                system_content = (
+                    "당신은 면접자의 음성 인식 결과를 맞춤법과 흐름 위주로 교정하는 교정 도우미입니다. \
+                    사용자의 어투 및 어미를 보존하고, 문법 오류와 앞 뒤 단어와 이어지지 않는 어색한 표현만 자연스럽게 수정하세요. 예: '교본 근무' → '교번근무' 혹은 '교대근무' \
+                    오타나 잘못 인식된 단어는 문맥상 자연스럽게 복원하세요. 예: '이후' → '이유'. \
+                    답변은 문장 하나로 출력하되, 면접 말투(자연스럽고 공손한 구어체)를 유지하며 문장 구조를 바꾸지 말고 \
+                    표현만 위에 제시한대로 다듬으세요."
+                ),
+                user_content = text
+            )
 
-    print(f"\n✅ JSON 파일이 저장되었습니다: {json_path}")
+            # 2. 감정 분석
+            audio_features = extract_audio_features(audio_dir, start, end) # 음향적 특징 추출
 
-# 음성 분석기 활용 예시
-load_dotenv() # .env 파일 로드
-api_key = os.getenv("OPENAI_API_KEY") # 키 읽어오기
-client = openai.OpenAI(api_key=api_key) # 클라이언트 생성
+            emotion_prompt = f"""
+            문장: "{text}"
+            평균 pitch: {audio_features["pitch_mean"]:.1f}Hz, pitch 변화량: {audio_features["pitch_std"]:.2f}
+            평균 에너지: {audio_features["energy_mean"]:.5f}, 에너지 변화량: {audio_features["energy_std"]:.5f}
+            말 빠르기(WPS): {wps:.2f}
+            """
 
-model = load_whisper_model()
+            emotion = openai_client.create_response(
+                system_content = (
+                    "당신은 문장의 감정을 분석하는 전문가입니다. "
+                    "텍스트와 음향적 특성을 고려하여 이 문장의 감정을 추론하세요: "
+                    "감정 하나의 단어만 출력하세요."
+                ),
+                user_content = emotion_prompt
+            )
 
- # 여러 파일 반복 처리
-for audio_file in [
-    './audio/ckmk_a_bm_f_e_47109.wav',
-    './audio/ckmk_a_bm_f_e_47110.wav',
-    './audio/ckmk_a_bm_f_e_47111.wav',
-    './audio/ckmk_a_bm_f_e_47112.wav'
-]:
-    print(f"audio_file: {audio_file}")
-    analize_audio(model, client, audio_file)
+            print(f"[{start:.1f}s --> {end:.1f}s] [{emotion}] {corrected}")
+
+            # 분석 된 문장 파일 저장을 위해 append
+            sentences.append({
+                "original_sentence": text,
+                "corrected_sentence": corrected,
+                "emotion": emotion,
+                "start": start,
+                "end": end,
+                "wps": wps
+            })
+
+        # JSON 데이터 구성
+        output_data = {"interview": sentences, "LUFS": loudness}
+        base_filename = os.path.splitext(os.path.basename(audio_dir))[0]
+
+        dump_json(filename = base_filename, json_data = output_data)
