@@ -45,7 +45,7 @@ class OpenAIEmbedding:
             print(f"[❌ 임베딩 생성 실패] {e}")
             raise
 
-def dump_json(json_dir = './json', filename = '', json_data = {}):
+def dump_json(json_dir = 'json', filename = '', json_data = {}):
     # JSON 파일 저장 경로 구성
     os.makedirs(f"./{json_dir}", exist_ok=True)  # 디렉토리 없으면 생성
     json_path = f"./{json_dir}/{filename}.json"
@@ -56,7 +56,7 @@ def dump_json(json_dir = './json', filename = '', json_data = {}):
 
     print(f"\n✅ JSON 파일이 저장되었습니다: {json_path}")
 
-def read_json(json_dir = './json', filename = ''):
+def read_json(json_dir = 'json', filename = ''):
     json_path = f"./{json_dir}/{filename}.json"
 
     # JSON 읽기
