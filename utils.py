@@ -31,14 +31,19 @@ class OpenAIEmbedding:
     def __init__(self, text):
         load_dotenv() # .env 파일 로드
         self.api_key = os.getenv("OPENAI_API_KEY") # 키 읽어오기
+        self.client = OpenAI(api_key=self.api_key)
         self.response = self.create_embedding(text)
 
     def __getattr__(self, name):
         return getattr(self.response, name)
 
-    def create_embedding(self, model = 'text-embedding-3-small', text = ''):
-        response = embeddings.create(input=text, model=model)
-        return np.array(response.data[0].embedding)
+    def create_embedding(self, text: str, model: str = 'text-embedding-ada-002'):
+        try:
+            response = self.client.embeddings.create(input=[text], model=model)
+            return np.array(response.data[0].embedding)
+        except Exception as e:
+            print(f"[❌ 임베딩 생성 실패] {e}")
+            raise
 
 def dump_json(json_dir = './json', filename = '', json_data = {}):
     # JSON 파일 저장 경로 구성

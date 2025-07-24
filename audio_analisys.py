@@ -142,6 +142,7 @@ class RealTimeAudioAnalyzer:
 class StaticAudioAnalyzer:
     def __init__(self):
         self.whisper_model = self.load_whisper_model()
+        self.openai_client = OpenAIClient()
 
     def load_whisper_model(self, model_size = "large"):
         '''
@@ -165,7 +166,7 @@ class StaticAudioAnalyzer:
         
         return model
 
-    def analize_audio(self, openai_client, audio_dir):
+    def analize_audio(self, audio_dir):
         """
         주어진 음성 파일을 Whisper로 분석하여 언어를 감지하고, 문장별 시작/끝 시간과 텍스트를 출력하는 함수
 
@@ -222,7 +223,7 @@ class StaticAudioAnalyzer:
             wps = word_cnt / duration if duration > 0 else 0 # words per second
 
             # 1. 부정확한 발음이나 문맥 상 자연스럽지 않은 표현을 GPT를 통해 후처리 교정
-            corrected = openai_client.create_response(
+            corrected = self.openai_client.create_response(
                 system_content = (
                     "당신은 면접자의 음성 인식 결과를 맞춤법과 흐름 위주로 교정하는 교정 도우미입니다. \
                     사용자의 어투 및 어미를 보존하고, 문법 오류와 앞 뒤 단어와 이어지지 않는 어색한 표현만 자연스럽게 수정하세요. 예: '교본 근무' → '교번근무' 혹은 '교대근무' \
@@ -249,7 +250,7 @@ class StaticAudioAnalyzer:
             말 빠르기(WPS): {wps:.2f}
             """
 
-            emotion = openai_client.create_response(
+            emotion = self.openai_client.create_response(
                 system_content = (
                     "당신은 문장의 감정을 분석하는 전문가입니다. "
                     "텍스트와 음향적 특성을 고려하여 이 문장의 감정을 추론하세요: "
