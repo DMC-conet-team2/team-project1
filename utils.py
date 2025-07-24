@@ -1,7 +1,8 @@
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import embeddings, OpenAI
 
 import json
+import numpy as np
 import os
 
 class OpenAIClient:
@@ -25,6 +26,19 @@ class OpenAIClient:
             ]
         )
         return response.choices[0].message.content.strip()
+    
+class OpenAIEmbedding:
+    def __init__(self, text):
+        load_dotenv() # .env 파일 로드
+        self.api_key = os.getenv("OPENAI_API_KEY") # 키 읽어오기
+        self.response = self.create_embedding(text)
+
+    def __getattr__(self, name):
+        return getattr(self.response, name)
+
+    def create_embedding(self, model = 'text-embedding-3-small', text = ''):
+        response = embeddings.create(input=text, model=model)
+        return np.array(response.data[0].embedding)
 
 def dump_json(json_dir = './json', filename = '', json_data = {}):
     # JSON 파일 저장 경로 구성

@@ -1,5 +1,6 @@
 from audio_utils import extract_audio_features
-from utils import OpenAIClient, dump_json, read_json
+from sklearn.metrics.pairwise import cosine_similarity
+from utils import OpenAIClient, OpenAIEmbedding, dump_json, read_json
 from queue import Queue
 
 import numpy as np
@@ -101,6 +102,12 @@ class RealTimeAudioAnalyzer:
                 user_content=text
             )
 
+            # 교정 후 코사인 유사도 저장
+            original_embedding = OpenAIEmbedding(text)
+            corrected_embedding = OpenAIEmbedding(corrected)
+
+            similarity = cosine_similarity([original_embedding], [corrected_embedding])[0][0]
+
             # 감정 추정
             features = extract_audio_features(filepath, 0, self.chunk_duration)
             emotion_prompt = f"""
@@ -120,6 +127,7 @@ class RealTimeAudioAnalyzer:
             self.output_sentences.append({
                 "original_sentence": text,
                 "corrected_sentence": corrected,
+                "cosine_similarity": similarity,
                 "emotion": emotion,
                 "wps": wps
             })
@@ -225,6 +233,12 @@ class StaticAudioAnalyzer:
                 user_content = text
             )
 
+            # 교정 후 코사인 유사도 저장
+            original_embedding = OpenAIEmbedding(text)
+            corrected_embedding = OpenAIEmbedding(corrected)
+
+            similarity = cosine_similarity([original_embedding], [corrected_embedding])[0][0]
+
             # 2. 감정 분석
             audio_features = extract_audio_features(audio_dir, start, end) # 음향적 특징 추출
 
@@ -250,6 +264,7 @@ class StaticAudioAnalyzer:
             sentences.append({
                 "original_sentence": text,
                 "corrected_sentence": corrected,
+                "cosine_similarity": similarity,
                 "emotion": emotion,
                 "start": start,
                 "end": end,
@@ -268,21 +283,39 @@ class AudioEvaluator:
         self.data = read_json(filename)
     
     def evaluate(self):
-        # LUFS 평가
+        # 문장별 평가
+        similarities = []
+        for idx, sentence in enumerate(self.data.get("interview", []), 1):
+            similarity = sentence.get("cosine_similarity")
+            emotion = sentence.get("emotion")
+            wps = sentence.get("wps")
+            
+            similarities.append(similarity)
+            if similarity < 0.8:
+                print(f"❌ 문장 {idx}: 의미적 차이 큼 (유사도 {similarity:.4f}) — 교정 필요")
+            elif similarity < 0.9:
+                print(f"⚠️ 문장 {idx}: 약간의 차이 있음 (유사도 {similarity:.4f}) — 자연스러움 개선")
+            else:
+                print(f"✅ 문장 {idx}: 거의 동일 (유사도 {similarity:.4f}) — 문법 교정만 필요")
+
+            print(f"문장 {idx}의 감정 : {emotion}")
+
+            if wps is None:
+                print(f"문장 {idx}: WPS 데이터가 없습니다.")
+            elif 2.5 <= wps <= 3.5:
+                print(f"✅ 문장 {idx}의 WPS [{wps}] : 정상")
+            else:
+                print(f"⚠️ 문장 {idx}의 WPS [{wps}] : 빠르거나 느립니다.")
+    
+        # 전체 평가
         lufs = self.data.get("LUFS")
         if lufs is None:
             print("LUFS 데이터가 없습니다.")
         elif -24 <= lufs <= -22:
-            print(f"✅ 목소리 크기 정상: [{lufs} LUFS]")
+            print(f"✅ 목소리 평균 크기 [{lufs} LUFS] : 정상")
         else:
-            print(f"⚠️ 목소리 크기 이상: 너무 크거나 작습니다. [{lufs} LUFS]")
-
-        # WPS 평가
-        for idx, sentence in enumerate(self.data.get("interview", []), 1):
-            wps = sentence.get("wps")
-            if wps is None:
-                print(f"문장 {idx}: WPS 데이터가 없습니다.")
-            elif 2.5 <= wps <= 3.0:
-                print(f"✅ 문장 {idx}의 WPS: 정상 [{wps}]")
-            else:
-                print(f"⚠️ 문장 {idx}의 WPS: 빠르거나 느립니다. [{wps}]")
+            print(f"⚠️ 목소리 평균 크기 [{lufs} LUFS] : 너무 크거나 작습니다. ")
+        
+        if similarities:
+            avg_sim = sum(similarities) / len(similarities)
+            print(f"\n📊 전체 평균 코사인 유사도: {avg_sim:.4f}")
