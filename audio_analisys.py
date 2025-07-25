@@ -2,8 +2,10 @@ from audio_utils import extract_audio_features
 from sklearn.metrics.pairwise import cosine_similarity
 from utils import OpenAIClient, OpenAIEmbedding, dump_json, read_json
 from queue import Queue
+from vosk import Model as VoskModel, KaldiRecognizer
 
 import numpy as np
+import json
 import os
 import pyloudnorm as pyln
 import sounddevice as sd
@@ -28,7 +30,7 @@ import whisper
     - 참고 근거 : https://www.kci.go.kr/kciportal/ci/sereArticleSearch/ciSereArtiView.kci?sereArticleSearchBean.artiId=ART002099342
 """
 
-class RealTimeAudioAnalyzer:
+class RealTimeAudioAnalyzerWhisper:
     def __init__(self):
         self.whisper_model = self.load_whisper_model()
 
@@ -133,6 +135,98 @@ class RealTimeAudioAnalyzer:
             })
 
             os.remove(filepath)  # 임시 파일 삭제
+
+    def stop(self):
+        self.listening = False
+        dump_json(filename="realtime_output", json_data={"interview": self.output_sentences})
+        print("\n🛑 분석 종료. JSON 파일 저장 완료.")
+
+class RealTimeAudioAnalyzerVosk:
+    def __init__(self):
+        self.vosk_model = VoskModel("vosk-model-small-ko-0.22")  # 한국어 모델 경로
+        self.recognizer = KaldiRecognizer(self.vosk_model, 16000)
+
+        self.q = Queue()
+        self.sample_rate = 16000
+        self.chunk_duration = 3  # 1~3번: shorter for quicker response
+        self.openai_client = OpenAIClient()
+        self.listening = False
+        self.output_sentences = []
+
+    def audio_callback(self, indata, frames, time_info, status):
+        self.q.put(indata.copy())
+
+    def start_stream(self):
+        self.listening = True
+        threading.Thread(target=self._record_audio, daemon=True).start()
+        threading.Thread(target=self._transcribe_loop, daemon=True).start()
+        print("🎧 실시간 음성 분석을 시작합니다. (Ctrl+C로 종료)")
+
+    def _record_audio(self):
+        with sd.InputStream(samplerate=self.sample_rate, channels=1, callback=self.audio_callback):
+            while self.listening:
+                time.sleep(0.1)
+
+    def _transcribe_loop(self):
+        buffer = b''
+
+        while self.listening:
+            chunk = self.q.get()
+            buffer += chunk.tobytes()
+
+            if self.recognizer.AcceptWaveform(buffer):
+                result = json.loads(self.recognizer.Result())
+                text = result.get("text", "").strip()
+
+                if not text:
+                    buffer = b''  # ⚠️ 이 위치에서 초기화
+                    continue
+
+                # save audio to temp file BEFORE buffer clear
+                audio_array = np.frombuffer(buffer, dtype=np.int16)
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                    filepath = f.name
+                    sf.write(filepath, audio_array, self.sample_rate)
+
+                buffer = b''  # ✅ buffer 초기화 위치 이쪽이 맞음
+
+                # 분석
+                duration = self.chunk_duration
+                wps = len(text.split()) / duration if duration > 0 else 0
+
+                corrected = self.openai_client.create_response(
+                    system_content="면접자의 말투를 유지하며 맞춤법 위주로 교정하며 교정한 내용만 출력하세요.",
+                    user_content=text
+                )
+
+                original_embedding = OpenAIEmbedding(text)
+                corrected_embedding = OpenAIEmbedding(corrected)
+                similarity = cosine_similarity([original_embedding], [corrected_embedding])[0][0]
+
+                features = extract_audio_features(filepath, 0, self.chunk_duration)
+                emotion_prompt = f"""
+                문장: "{text}"
+                평균 pitch: {features["pitch_mean"]:.1f}Hz, pitch 변화량: {features["pitch_std"]:.2f}
+                평균 에너지: {features["energy_mean"]:.5f}, 에너지 변화량: {features["energy_std"]:.5f}
+                말 빠르기(WPS): {wps:.2f}
+                """
+
+                emotion = self.openai_client.create_response(
+                    system_content="이 문장의 감정을 하나의 단어로 추론하세요.",
+                    user_content=emotion_prompt
+                )
+
+                print(f"[{emotion}] {corrected}")
+
+                self.output_sentences.append({
+                    "original_sentence": text,
+                    "corrected_sentence": corrected,
+                    "cosine_similarity": similarity,
+                    "emotion": emotion,
+                    "wps": wps
+                })
+
+                os.remove(filepath)
 
     def stop(self):
         self.listening = False
