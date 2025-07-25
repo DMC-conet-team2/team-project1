@@ -17,15 +17,15 @@ import whisper
 """
 ### 음성 분석의 정상범위 평가 기준
 - 소리 크기 : –23 LUFS ± 1.0
-- 말 빠르기 : 150~180 WPM(2.5 ~ 3 WPS)
+- 말 빠르기 : 129.7 ± 25.9 WPM WPM(≈ 1.73 ~ 2.59 WPS)
 
 ### 평가 기준 근거
 - 소리 크기
     - EBU(European Broadcasting Union)의 라이브 방송 표준 범위
     - 참고 근거 : https://tech.ebu.ch/files/live/sites/tech/files/shared/r/r128.pdf
 - 말 빠르기
-    - 자연스러운 자발적 발화에서의 평균 WPM 추정 범위
-    - https://ccnmtl.columbia.edu/services/dropoff/krauss/seqential_patterns.pdf
+    - (자연스러운 자발적 발화에서의 평균 WPM 추정 범위) / 60 => WPS(Words Per Second)
+    - 참고 근거 : https://www.kci.go.kr/kciportal/ci/sereArticleSearch/ciSereArtiView.kci?sereArticleSearchBean.artiId=ART002099342
 """
 
 class RealTimeAudioAnalyzer:
@@ -303,7 +303,7 @@ class AudioEvaluator:
 
             if wps is None:
                 print(f"문장 {idx}: WPS 데이터가 없습니다.")
-            elif 2.5 <= wps <= 3.5:
+            elif 1.73 <= wps <= 2.59:
                 print(f"✅ 문장 {idx}의 WPS [{wps}] : 정상")
             else:
                 print(f"⚠️ 문장 {idx}의 WPS [{wps}] : 빠르거나 느립니다.")
