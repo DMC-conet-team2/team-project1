@@ -1,8 +1,6 @@
-from audio_analisys import RealTimeAudioAnalyzerWhisper, RealTimeAudioAnalyzerVosk, RealTimeAudioAnalyzerGoogleSTT # 실시간
+from audio_analisys import RealtimeAudioAnalyzer # 실시간
 from audio_analisys import StaticAudioAnalyzer # 음성 파일
 from audio_analisys import AudioEvaluator # 평가
-
-import time
 
 # analyzer = StaticAudioAnalyzer()
 
@@ -23,12 +21,6 @@ import time
 #     eval = AudioEvaluator(json)
 #     eval.evaluate()
 
-analyzer_whisper = RealTimeAudioAnalyzerWhisper()
-analyzer_vosk = RealTimeAudioAnalyzerVosk()
-analyzer_stt = RealTimeAudioAnalyzerGoogleSTT()
-try:
-    analyzer_whisper.start_stream()
-    while True:
-        time.sleep(1)
-except KeyboardInterrupt:
-    analyzer_whisper.stop()
+if __name__ == "__main__":
+    analyzer = RealtimeAudioAnalyzer(language_code="ko-KR")
+    analyzer.start()

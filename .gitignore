@@ -4,3 +4,4 @@ __pycache__/
 audio/
 google-stt/
 json/
+vosk-model-small-ko-0.22/
