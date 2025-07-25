@@ -1,7 +1,6 @@
 from audio_utils import extract_audio_features
 from dotenv import load_dotenv
 from google.cloud import speech
-from six.moves import queue
 from sklearn.metrics.pairwise import cosine_similarity
 from utils import OpenAIClient, OpenAIEmbedding, dump_json, read_json
 
@@ -10,6 +9,7 @@ import pyaudio
 import pyloudnorm as pyln
 import soundfile as sf
 import torch
+import queue
 import whisper
 
 """
