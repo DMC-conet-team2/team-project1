@@ -281,7 +281,7 @@ class StaticAudioAnalyzer:
 class AudioEvaluator:
     def __init__(self, filename):
         self.filename = filename
-        self.data = read_json(filename)
+        self.data = read_json(filename = filename)
     
     def evaluate(self):
         # 문장별 평가

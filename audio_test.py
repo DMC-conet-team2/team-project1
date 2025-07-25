@@ -2,21 +2,21 @@ from audio_analisys import RealTimeAudioAnalyzer, StaticAudioAnalyzer, AudioEval
 
 import time
 
-analyzer = StaticAudioAnalyzer()
+# analyzer = StaticAudioAnalyzer()
 
-for audio in [
-    "./audio/ckmk_a_bm_f_e_47109.wav",
-    "./audio/ckmk_a_bm_f_e_47110.wav",
-    "./audio/ckmk_a_bm_f_e_47111.wav",
-    "./audio/ckmk_a_bm_f_e_47112.wav"
-]:
-    analyzer.analize_audio(audio)
+# for audio in [
+#     "./audio/ckmk_a_bm_f_e_47109.wav",
+#     "./audio/ckmk_a_bm_f_e_47110.wav",
+#     "./audio/ckmk_a_bm_f_e_47111.wav",
+#     "./audio/ckmk_a_bm_f_e_47112.wav"
+# ]:
+#     analyzer.analize_audio(audio)
 
 for json in [
-    "./json/ckmk_a_bm_f_e_47109.json",
-    "./json/ckmk_a_bm_f_e_47110.json",
-    "./json/ckmk_a_bm_f_e_47111.json",
-    "./json/ckmk_a_bm_f_e_47112.json"
+    "ckmk_a_bm_f_e_47109",
+    "ckmk_a_bm_f_e_47110",
+    "ckmk_a_bm_f_e_47111",
+    "ckmk_a_bm_f_e_47112"
 ]:
     eval = AudioEvaluator(json)
     eval.evaluate()
