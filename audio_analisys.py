@@ -10,6 +10,7 @@ import os
 import pyloudnorm as pyln
 import sounddevice as sd
 import soundfile as sf
+import speech_recognition as sr
 import tempfile
 import threading
 import time
@@ -227,6 +228,104 @@ class RealTimeAudioAnalyzerVosk:
                 })
 
                 os.remove(filepath)
+
+    def stop(self):
+        self.listening = False
+        dump_json(filename="realtime_output", json_data={"interview": self.output_sentences})
+        print("\n🛑 분석 종료. JSON 파일 저장 완료.")
+
+class RealTimeAudioAnalyzerGoogleSTT:
+    def __init__(self, use_google_cloud=True):
+        self.q = Queue()
+        self.sample_rate = 16000
+        self.chunk_duration = 5  # 초 단위
+        self.listening = False
+        self.output_sentences = []
+        self.openai_client = OpenAIClient()
+        self.use_google_cloud = use_google_cloud  # True면 GCP, False면 Google Web Speech API 사용
+        self.recognizer = sr.Recognizer()
+        self.recognizer.energy_threshold = 300  # 음성 인식 민감도 설정
+
+    def audio_callback(self, indata, frames, time_info, status):
+        self.q.put(indata.copy())
+
+    def start_stream(self):
+        self.listening = True
+        threading.Thread(target=self._record_audio, daemon=True).start()
+        threading.Thread(target=self._transcribe_loop, daemon=True).start()
+        print("🎧 Google STT 기반 실시간 음성 분석 시작 (Ctrl+C로 종료)")
+
+    def _record_audio(self):
+        import sounddevice as sd
+        with sd.InputStream(samplerate=self.sample_rate, channels=1, callback=self.audio_callback):
+            while self.listening:
+                time.sleep(0.1)
+
+    def _transcribe_loop(self):
+        while self.listening:
+            audio_chunk = self.q.get()
+            audio_chunk = np.squeeze(audio_chunk)
+
+            # WAV로 저장
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                filepath = f.name
+                sf.write(filepath, audio_chunk, self.sample_rate)
+
+            # Google STT로 음성 인식
+            with sr.AudioFile(filepath) as source:
+                audio = self.recognizer.record(source)
+                try:
+                    if self.use_google_cloud:
+                        text = self.recognizer.recognize_google_cloud(audio, language="ko-KR")
+                    else:
+                        text = self.recognizer.recognize_google(audio, language="ko-KR")
+                except sr.UnknownValueError:
+                    print("❗ 음성을 인식할 수 없습니다.")
+                    os.remove(filepath)
+                    continue
+                except sr.RequestError as e:
+                    print(f"❗ 요청 실패: {e}")
+                    os.remove(filepath)
+                    continue
+
+            text = text.strip()
+            duration = self.chunk_duration
+            wps = len(text.split()) / duration if duration > 0 else 0
+
+            # 교정
+            corrected = self.openai_client.create_response(
+                system_content="면접자의 말투를 유지하며 맞춤법 위주로 교정하며 교정한 내용만 출력하세요.",
+                user_content=text
+            )
+
+            original_embedding = OpenAIEmbedding(text)
+            corrected_embedding = OpenAIEmbedding(corrected)
+            similarity = cosine_similarity([original_embedding], [corrected_embedding])[0][0]
+
+            # 감정 추정
+            features = extract_audio_features(filepath, 0, self.chunk_duration)
+            emotion_prompt = f"""
+            문장: "{text}"
+            평균 pitch: {features["pitch_mean"]:.1f}Hz, pitch 변화량: {features["pitch_std"]:.2f}
+            평균 에너지: {features["energy_mean"]:.5f}, 에너지 변화량: {features["energy_std"]:.5f}
+            말 빠르기(WPS): {wps:.2f}
+            """
+            emotion = self.openai_client.create_response(
+                system_content="이 문장의 감정을 하나의 단어로 추론하세요.",
+                user_content=emotion_prompt
+            )
+
+            print(f"[{emotion}] {corrected}")
+
+            self.output_sentences.append({
+                "original_sentence": text,
+                "corrected_sentence": corrected,
+                "cosine_similarity": similarity,
+                "emotion": emotion,
+                "wps": wps
+            })
+
+            os.remove(filepath)
 
     def stop(self):
         self.listening = False
